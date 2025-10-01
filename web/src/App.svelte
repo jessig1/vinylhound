@@ -11,6 +11,8 @@
     updateContent,
     ApiError,
   } from "./lib/api";
+  import { normalizeContent } from "./lib/content";
+  import { readSession, writeSession, clearSession } from "./lib/session";
 
   let token = "";
   let activeUser = "";
@@ -23,62 +25,56 @@
   let authPanel;
 
   onMount(() => {
-    if (typeof window === "undefined") {
+    const stored = readSession();
+    if (!stored) {
       return;
     }
-    const storedToken = window.localStorage.getItem("vinyhound:token");
-    const storedUser = window.localStorage.getItem("vinyhound:user");
-    if (storedToken && storedUser) {
-      token = storedToken;
-      activeUser = storedUser;
-      loadContent(false);
-    }
+    token = stored.token;
+    activeUser = stored.username;
+    loadContent({ silent: true });
   });
 
-  function normalizeContent(value) {
-    if (!value) {
-      return [];
-    }
-    return value
-      .split(/\r?\n/)
-      .map(function (entry) {
-        return entry.trim();
-      })
-      .filter(Boolean);
-  }
-
-  function persistSession() {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem("vinyhound:token", token);
-    window.localStorage.setItem("vinyhound:user", activeUser);
-  }
-
-  function clearSession() {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.removeItem("vinyhound:token");
-    window.localStorage.removeItem("vinyhound:user");
-  }
-
-  function logout() {
-    token = "";
-    activeUser = "";
-    content = [];
-    contentDraft = "";
-    clearSession();
+  function setMessage(value = "", kind = "info") {
+    message = value;
+    messageKind = kind;
   }
 
   function clearMessage() {
-    message = "";
-    messageKind = "info";
+    setMessage();
   }
 
-  function setMessage(value, kind) {
-    message = value;
-    messageKind = kind || "info";
+  async function execute(task, fallbackMessage) {
+    loading = true;
+    try {
+      await task();
+      return true;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        logout();
+        setMessage("Session expired. Please log in again.", "error");
+      } else {
+        setMessage(err?.message || fallbackMessage, "error");
+      }
+      return false;
+    } finally {
+      loading = false;
+    }
+  }
+
+  function applySession(newToken, username) {
+    token = newToken;
+    activeUser = username;
+    if (newToken && username) {
+      writeSession({ token: newToken, username });
+    } else {
+      clearSession();
+    }
+  }
+
+  function logout() {
+    applySession("", "");
+    content = [];
+    contentDraft = "";
   }
 
   async function handleSignup(event) {
@@ -91,19 +87,15 @@
       return;
     }
 
-    loading = true;
     clearMessage();
-    try {
-      const contentPayload = normalizeContent(detail.content || "");
-      await apiSignup({ username, password, content: contentPayload });
+    const succeeded = await execute(async () => {
+      const initialContent = normalizeContent(detail.content || "");
+      await apiSignup({ username, password, content: initialContent });
+    }, "Unable to sign up.");
+
+    if (succeeded) {
       setMessage("Account created for " + username + ". You can log in now.", "success");
-      if (authPanel && authPanel.resetSignup) {
-        authPanel.resetSignup();
-      }
-    } catch (err) {
-      setMessage(err.message || "Unable to sign up.", "error");
-    } finally {
-      loading = false;
+      authPanel?.resetSignup?.();
     }
   }
 
@@ -117,51 +109,40 @@
       return;
     }
 
-    loading = true;
     clearMessage();
-    try {
+    const succeeded = await execute(async () => {
       const data = await apiLogin({ username, password });
-      if (authPanel && authPanel.resetLogin) {
-        authPanel.resetLogin();
+      const tokenValue = data?.token || "";
+      if (!tokenValue) {
+        throw new Error("Login response missing token.");
       }
-      token = data && data.token ? data.token : "";
-      activeUser = username;
-      persistSession();
-      await loadContent(false);
-      setMessage("Welcome back, " + activeUser + "!", "success");
-    } catch (err) {
-      setMessage(err.message || "Unable to log in.", "error");
-    } finally {
-      loading = false;
+      applySession(tokenValue, username);
+      authPanel?.resetLogin?.();
+    }, "Unable to log in.");
+
+    if (succeeded) {
+      await loadContent({ silent: true });
+      setMessage("Welcome back, " + username + "!", "success");
     }
   }
 
-  async function loadContent(showSuccess) {
+  async function loadContent({ silent = true } = {}) {
     if (!token) {
       return;
     }
+    if (!silent) {
+      clearMessage();
+    }
 
-    loading = true;
-    try {
+    const succeeded = await execute(async () => {
       const data = await fetchContent(token);
-      const items =
-        data && typeof data === "object" && Array.isArray(data.content)
-          ? data.content
-          : [];
+      const items = Array.isArray(data?.content) ? data.content : [];
       content = items;
       contentDraft = items.join("\n");
-      if (showSuccess) {
-        setMessage("Content refreshed.", "success");
-      }
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        logout();
-        setMessage("Session expired. Please log in again.", "error");
-        return;
-      }
-      setMessage(err.message || "Unable to load content.", "error");
-    } finally {
-      loading = false;
+    }, "Unable to load content.");
+
+    if (succeeded && !silent) {
+      setMessage("Content refreshed.", "success");
     }
   }
 
@@ -171,31 +152,23 @@
       return;
     }
 
-    loading = true;
     clearMessage();
-    try {
-      const detail = event.detail || {};
-      const draftValue = detail.draft !== undefined ? detail.draft : contentDraft;
-      const entries = normalizeContent(draftValue);
+    const draftValue = event.detail?.draft ?? contentDraft;
+    const entries = normalizeContent(draftValue);
+
+    const succeeded = await execute(async () => {
       await updateContent(token, entries);
+    }, "Unable to save content.");
+
+    if (succeeded) {
       content = entries;
       contentDraft = entries.join("\n");
       setMessage("Content updated.", "success");
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        logout();
-        setMessage("Session expired. Please log in again.", "error");
-        return;
-      }
-      setMessage(err.message || "Unable to save content.", "error");
-    } finally {
-      loading = false;
     }
   }
 
   async function handleRefreshContent() {
-    clearMessage();
-    await loadContent(true);
+    await loadContent({ silent: false });
   }
 </script>
 
