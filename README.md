@@ -1,46 +1,56 @@
 # Vinyhound
 
-Small Go HTTP service that lets users sign up, log in, and view content that belongs only to them. Everything is kept in memory so you can explore the flow without a database. A lightweight Svelte SPA is included for interacting with the API.
+Small Go HTTP service that lets users sign up, log in, and view content that belongs only to them. Data now lives in Postgres instead of an in-memory map, and a lightweight Svelte SPA is included for interacting with the API.
 
 ## Prerequisites
 
 - Go 1.21+
 - Node 18+ (for the Svelte frontend)
+- Postgres 14+ (or compatible hosted option)
+
+## Database setup
+
+1. Create a Postgres database that the app can reach.
+2. Apply the schema located at `db/schema.sql`. Example:
+   ```bash
+   psql $DATABASE_URL -f db/schema.sql
+   ```
+
+`DATABASE_URL` should be a standard Postgres connection string such as `postgres://user:pass@localhost:5432/vinyhound?sslmode=disable`.
 
 ## Run locally
 
-`ash
+```bash
 go mod tidy
 go run ./cmd/vinyhound
-`
+```
 
-In another terminal for the web app:
+The backend expects `DATABASE_URL` in the environment before it starts. In another terminal for the web app:
 
-`ash
+```bash
 cd web
 npm install
 npm run dev
-`
+```
 
-The Svelte app will listen on http://localhost:5173 and proxies API calls to the Go server running at http://localhost:8080. Set PORT or run 
-pm run dev -- --port <port> to customize.
+The Svelte app listens on http://localhost:5173 and proxies API calls to the Go server running at http://localhost:8080. Set `PORT` or run `npm run dev -- --port <port>` to customize.
 
 ## API
 
-- POST /signup ? create an account. Body:
-  `json
+- POST /signup – create an account. Body:
+  ```json
   { "username": "alice", "password": "secret", "content": ["First playlist", "Second playlist"] }
-  `
-- POST /login ? receive a bearer token for authenticated calls.
-  `json
+  ```
+- POST /login – receive a bearer token for authenticated calls.
+  ```json
   { "username": "alice", "password": "secret" }
-  `
+  ```
   Response:
-  `json
+  ```json
   { "token": "..." }
-  `
-- GET /me/content ? return the current user content. Requires Authorization: Bearer <token>.
-- PUT /me/content ? replace the current content array. Same auth header.
+  ```
+- GET /me/content – return the current user content. Requires `Authorization: Bearer <token>`.
+- PUT /me/content – replace the current content array. Same auth header.
 
 ## Frontend UX
 
@@ -54,5 +64,5 @@ The Svelte SPA provides:
 ## Notes
 
 - Passwords are hashed with bcrypt before storage.
-- Sessions are held in memory; restarting the server clears them.
-- A demo account (demo / demo123) is created at startup with sample content.
+- Session tokens persist in the `sessions` table; delete rows or drop the table to invalidate them.
+- A demo account (`demo` / `demo123`) is created at startup with sample content if it is not already present.
