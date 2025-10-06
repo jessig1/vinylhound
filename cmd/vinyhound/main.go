@@ -8,17 +8,18 @@ import (
 	"net/http"
 	"os"
 	"time"
-
+	 "github.com/joho/godotenv"
 	_ "github.com/jackc/pgx/v5/stdlib"
-
 	"vinyhound/internal/app"
 )
 
 func main() {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		log.Fatal("DATABASE_URL env var is required")
-	}
+	_ = godotenv.Load("config/local.env") // ignore the error if the file is optional
+
+    dsn := os.Getenv("DATABASE_URL")
+    if dsn == "" {
+        log.Fatal("DATABASE_URL env var is required")
+    }
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
